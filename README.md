@@ -1,4 +1,4 @@
-# Fine-Grained Photovoltaic Fault Classification
+# Fine-Grained Photovoltaic Fault Classification from Infrared Images
 
 Deep-learning classification of photovoltaic module faults from infrared images.
 

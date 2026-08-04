@@ -185,10 +185,10 @@ def classify_image(image):
 
 
 with gr.Blocks(
-    title="PV Fault Classification"
+    title="Fine-Grained Photovoltaic Fault Classification from Infrared Images"
 ) as demo:
     gr.Markdown(
-        "# PV Fault Classification\n"
+        "# Fine-Grained Photovoltaic Fault Classification from Infrared Images\n"
         "Classify an infrared PV module image using the trained ResNet-18 model.\n\n"
         "*Research demonstrator only — not a substitute for professional inspection.*"
     )
