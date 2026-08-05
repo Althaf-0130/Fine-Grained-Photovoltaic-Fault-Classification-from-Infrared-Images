@@ -11,9 +11,16 @@ import torch
 from PIL import Image
 from torch import nn
 from torchvision import transforms
-from torchvision.models import resnet18
+from torchvision.models import resnet18, resnet50
 
-def find_artifact_directory():
+
+CHECKPOINT_FILENAMES = (
+    "pv_fault_resnet50.pt",
+    "pv_fault_resnet18.pt",
+)
+
+
+def find_artifact():
     app_directory = Path(__file__).resolve().parent
     candidates = []
     configured_directory = os.environ.get("PV_FAULT_APP_DIR")
@@ -26,12 +33,14 @@ def find_artifact_directory():
         Path("/content/pv_fault_colab/outputs"),
     ])
     for candidate in candidates:
-        if (candidate / "pv_fault_resnet18.pt").exists():
-            return candidate
+        for checkpoint_name in CHECKPOINT_FILENAMES:
+            checkpoint_path = candidate / checkpoint_name
+            if checkpoint_path.exists():
+                return candidate, checkpoint_path
     searched = "\n".join(str(path) for path in candidates)
     raise FileNotFoundError(
         "The trained model was not found. Run the notebook first or set "
-        "PV_FAULT_APP_DIR to the folder containing pv_fault_resnet18.pt.\n"
+        "PV_FAULT_APP_DIR to the folder containing the trained checkpoint.\n"
         f"Searched:\n{searched}"
     )
 
@@ -43,8 +52,13 @@ def load_checkpoint(path):
         return torch.load(path, map_location="cpu")
 
 
-APP_DIR = find_artifact_directory()
-CHECKPOINT = load_checkpoint(APP_DIR / "pv_fault_resnet18.pt")
+APP_DIR, CHECKPOINT_PATH = find_artifact()
+CHECKPOINT = load_checkpoint(CHECKPOINT_PATH)
+ARCHITECTURE = str(CHECKPOINT.get("architecture", "resnet18"))
+MODEL_DISPLAY_NAME = {
+    "resnet50": "ResNet-50",
+    "resnet18": "ResNet-18",
+}.get(ARCHITECTURE, ARCHITECTURE)
 LABEL_TO_INDEX = {
     str(label): int(index)
     for label, index in CHECKPOINT["label_to_index"].items()
@@ -58,6 +72,7 @@ LABEL_NAMES = [
     for index in range(len(INDEX_TO_LABEL))
 ]
 IMAGE_SIZE = int(CHECKPOINT.get("image_size", 128))
+RESIZE_POLICY = str(CHECKPOINT.get("resize_policy", "direct square resize"))
 MEAN = CHECKPOINT.get("normalization_mean", [0.485, 0.456, 0.406])
 STD = CHECKPOINT.get("normalization_std", [0.229, 0.224, 0.225])
 CLASS_PRIORS = np.asarray(
@@ -67,13 +82,53 @@ CLASS_PRIORS = np.asarray(
 SELECTED_TAU = float(CHECKPOINT.get("selected_tau", 0.0))
 
 
-MODEL = resnet18(weights=None)
-MODEL.fc = nn.Linear(MODEL.fc.in_features, len(LABEL_NAMES))
+def build_model(architecture, num_classes):
+    if architecture == "resnet50":
+        model = resnet50(weights=None)
+    elif architecture == "resnet18":
+        model = resnet18(weights=None)
+    else:
+        raise ValueError(f"Unsupported checkpoint architecture: {architecture}")
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    return model
+
+
+MODEL = build_model(ARCHITECTURE, len(LABEL_NAMES))
 MODEL.load_state_dict(CHECKPOINT["model_state_dict"])
 MODEL.eval()
 
+
+class LetterboxTransform:
+    def __init__(self, size, fill=128):
+        self.size = int(size)
+        self.fill = int(fill)
+
+    def __call__(self, image):
+        width, height = image.size
+        scale = min(self.size / width, self.size / height)
+        resized_size = (
+            max(1, round(width * scale)),
+            max(1, round(height * scale)),
+        )
+        resized = image.resize(resized_size, Image.Resampling.BILINEAR)
+        canvas = Image.new(
+            "RGB",
+            (self.size, self.size),
+            (self.fill, self.fill, self.fill),
+        )
+        left = (self.size - resized.width) // 2
+        top = (self.size - resized.height) // 2
+        canvas.paste(resized, (left, top))
+        return canvas
+
+
+if RESIZE_POLICY == "aspect-ratio-preserving letterbox resize":
+    resize_transform = LetterboxTransform(IMAGE_SIZE)
+else:
+    resize_transform = transforms.Resize((IMAGE_SIZE, IMAGE_SIZE))
+
 TRANSFORM = transforms.Compose([
-    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+    resize_transform,
     transforms.ToTensor(),
     transforms.Normalize(MEAN, STD),
 ])
@@ -189,7 +244,7 @@ with gr.Blocks(
 ) as demo:
     gr.Markdown(
         "# Fine-Grained Photovoltaic Fault Classification from Infrared Images\n"
-        "Classify an infrared PV module image using the trained ResNet-18 model.\n\n"
+        f"Classify an infrared PV module image using the trained {MODEL_DISPLAY_NAME} model.\n\n"
         "*Research demonstrator only — not a substitute for professional inspection.*"
     )
     with gr.Row():
